@@ -1,0 +1,17 @@
+[package]
+name = "computer-graphic-and-vision"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.100"
+opencv = "0.97.2"
+runarium = "0.1.0"
+
+[[bin]]
+name = "rvs"
+path = "src/bin/route_video_scratch.rs"
+
+[[bin]]
+name = "rvw"
+path = "src/bin/route_video_wasm.rs"
