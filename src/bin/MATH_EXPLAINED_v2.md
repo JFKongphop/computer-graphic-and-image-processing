@@ -1,6 +1,8 @@
-# FastImage: Mathematical Foundations for GPS Route Visualization
+# Mathematical Foundations of 2D Computer Graphics for GPS Visualization
 
-This document explains the mathematical operations behind the `FastImage` struct, a high-performance image rendering system for drawing GPS routes with anti-aliased lines and shapes.
+This document explains the mathematical operations behind the `FastImage` struct, a high-performance image rendering system for drawing GPS routes with anti-aliased lines and shapes. Each mathematical concept is visualized through working Rust code with OpenCV, demonstrating how abstract formulas translate into practical implementations.
+
+> **⚠️ Important Note:** All code presented in this document is for **educational and proof-of-concept purposes only**. The implementations serve to visualize and demonstrate mathematical concepts, not as production-grade code. They lack features such as comprehensive error handling, bounds checking, thread safety, and optimization for performance-critical applications. Use this code to understand the mathematics and algorithms, but refactor and harden it before using in production systems.
 
 **What you'll learn:**
 - How to convert between 2D images and 1D arrays
@@ -253,6 +255,49 @@ $$C_{\text{new}} = C_{\text{old}} + (C_{\text{new}} - C_{\text{old}}) \times \al
 Alternative form:
 
 $$C_{\text{new}} = C_{\text{old}} \times (1 - \alpha) + C_{\text{new}} \times \alpha$$
+
+**Understanding the Formula:**
+
+**Form 1 (Used in code):**
+```
+result = old + (new - old) × α
+```
+This is **linear interpolation** (lerp):
+1. `new - old` = Calculate the difference/distance between colors
+2. `× α` = Take a fraction of that distance (α = 0.3 means 30% of the way)
+3. `old + ...` = Start from old color and move toward new color
+
+**Form 2 (Standard definition):**
+```
+result = old × (1 - α) + new × α
+```
+This is **weighted average**:
+1. `old × (1 - α)` = Weight of old color (if α=0.3, old gets 70% weight)
+2. `new × α` = Weight of new color (if α=0.3, new gets 30% weight)
+3. `+` = Combine both weighted colors
+
+**Why they're the same:**
+```
+Form 2: old × (1 - α) + new × α
+      = old × 1 - old × α + new × α         (distribute)
+      = old - old × α + new × α             (simplify)
+      = old + new × α - old × α             (rearrange)
+      = old + (new - old) × α               (factor out α)
+      = Form 1 ✓
+```
+
+**Step-by-step breakdown:**
+1. `C_old` = Current pixel color already on screen (background)
+2. `C_new` = New color we want to draw (foreground)
+3. `α` (alpha) = Opacity/transparency level (0.0 to 1.0)
+4. `(C_new - C_old)` = Color difference between new and old
+5. `× α` = Move α% of the way from old to new
+6. `C_old + ...` = Start from old, add the movement
+
+**Variable meanings:**
+- `α = 0.0` → Fully transparent (0% new, 100% old) = keep old color
+- `α = 0.5` → Half transparent (50% new, 50% old) = perfect blend
+- `α = 1.0` → Fully opaque (100% new, 0% old) = replace with new
 
 ### Example: Alpha Blending
 ```
