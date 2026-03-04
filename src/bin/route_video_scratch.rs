@@ -2,7 +2,7 @@ use opencv::{core, imgcodecs, imgproc, prelude::*, videoio, Error};
 use runarium::utils::{
   converter::get_bounds, performance::measure, read_file::fit_reader,
 };
-use computer_graphic_and_vision::utils::drawer::FastImage;
+use computer_graphic_and_vision::utils::Drawer;
 
 /// ---------------------------
 /// 1. Load & Resize (your code)
@@ -93,7 +93,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
       )?;
 
       // Convert to fast buffer
-      let mut fast = FastImage::from_mat(&bg_mat);
+      let mut fast = Drawer::from_mat(&bg_mat);
 
       // Prepare video writer (MP4)
       let fps = (route.len() / 15) as f64;
@@ -137,7 +137,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
 
         // Clone the current accumulated route for this frame
-        let mut frame_buffer = fast.clone();
+        let mut frame_buffer = Drawer::new(fast.clone_base());
 
         // Draw the moving point as a circle on the frame copy (Green)
         frame_buffer.draw_circle(

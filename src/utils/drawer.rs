@@ -1,54 +1,34 @@
-use opencv::{core, prelude::*};
+/// Drawing operations for images (like "Human extends Leg")
+/// Wraps BasedImage and provides drawing methods
 
-/// ---------------------------
-/// 2. Fast Image Struct
-/// ---------------------------
+use super::image::BasedImage;
+
+/// Drawer struct - extends BasedImage with drawing capabilities
+/// Like "Human extends Leg" in TypeScript
 #[derive(Clone)]
-pub struct FastImage {
-  pub w: usize,
-  pub h: usize,
-  pub data: Vec<u8>, // BGR
+pub struct Drawer {
+  pub base: BasedImage,  // The "parent class" - like super() in TypeScript
 }
 
-impl FastImage {
-  /// Creates a FastImage from an OpenCV Mat.
-  /// Copies the image data from Mat into a Vec<u8> for fast pixel access.
-  /// 
-  /// # Arguments
-  /// * `mat` - OpenCV Mat containing BGR image data
-  /// 
-  /// # Returns
-  /// FastImage with copied pixel data
-  pub fn from_mat(mat: &Mat) -> Self {
-    // Get image dimensions
-    let w = mat.cols() as usize;  // Image width in pixels
-    let h = mat.rows() as usize;  // Image height in pixels
-
-    // Extract raw pixel data from OpenCV Mat
-    let slice = mat.data_bytes().unwrap();
-    let data = slice.to_vec();  // Copy to owned Vec for mutation
-
-    Self { w, h, data }
+impl Drawer {
+  /// Constructor - creates Drawer from BasedImage (like calling super())
+  pub fn new(base: BasedImage) -> Self {
+    Self { base }
   }
 
-  /// Converts FastImage back to OpenCV Mat.
-  /// Creates a new Mat and copies the pixel data into it.
-  /// 
-  /// # Returns
-  /// OpenCV Mat with BGR image data
-  pub fn to_mat(&self) -> Mat {
-    // Create a new Mat with same dimensions and CV_8UC3 type (8-bit unsigned, 3 channels)
-    let mut mat = unsafe {
-      Mat::new_rows_cols(
-        self.h as i32,  // Height in pixels
-        self.w as i32,  // Width in pixels
-        core::CV_8UC3,  // 8-bit BGR format
-      )
-      .unwrap()
-    };
-    // Copy pixel data from our buffer into the Mat
-    mat.data_bytes_mut().unwrap().copy_from_slice(&self.data);
-    mat
+  /// Create Drawer directly from OpenCV Mat
+  pub fn from_mat(mat: &opencv::core::Mat) -> Self {
+    Self::new(BasedImage::from_mat(mat))
+  }
+
+  /// Convert back to OpenCV Mat
+  pub fn to_mat(&self) -> opencv::core::Mat {
+    self.base.to_mat()
+  }
+
+  /// Clone the base image (useful for creating frames)
+  pub fn clone_base(&self) -> BasedImage {
+    self.base.clone()
   }
 
   /// Sets a pixel with alpha blending (anti-aliasing support).
@@ -60,32 +40,32 @@ impl FastImage {
   /// * `b`, `g`, `r` - Blue, Green, Red color values (0-255)
   /// * `a` - Alpha/opacity value (0.0-1.0, where 1.0 is fully opaque)
   #[inline]
-  fn put_pixel_bgr(&mut self, x: i32, y: i32, b: u8, g: u8, r: u8, a: f32) {
+  pub fn put_pixel_bgr(&mut self, x: i32, y: i32, b: u8, g: u8, r: u8, a: f32) {
     // Bounds check: ensure coordinates are within image dimensions
     if x < 0 || y < 0 {
       return;
     }
     let x = x as usize;
     let y = y as usize;
-    if x >= self.w || y >= self.h {
+    if x >= self.base.w || y >= self.base.h {
       return;
     }
 
     // Calculate pixel index in flat array (BGR format: 3 bytes per pixel)
-    let idx = (y * self.w + x) * 3;
+    let idx = (y * self.base.w + x) * 3;
     
     // Clamp alpha to valid range [0.0, 1.0]
     let ai = a.clamp(0.0, 1.0);
 
     // Get existing pixel values (for alpha blending)
-    let ob = self.data[idx] as f32;      // Original blue
-    let og = self.data[idx + 1] as f32;  // Original green
-    let or = self.data[idx + 2] as f32;  // Original red
+    let ob = self.base.data[idx] as f32;      // Original blue
+    let og = self.base.data[idx + 1] as f32;  // Original green
+    let or = self.base.data[idx + 2] as f32;  // Original red
 
     // Alpha blend: new_color = old_color + (new_color - old_color) * alpha
-    self.data[idx]     = (ob + (b as f32 - ob) * ai) as u8;
-    self.data[idx + 1] = (og + (g as f32 - og) * ai) as u8;
-    self.data[idx + 2] = (or + (r as f32 - or) * ai) as u8;
+    self.base.data[idx]     = (ob + (b as f32 - ob) * ai) as u8;
+    self.base.data[idx + 1] = (og + (g as f32 - og) * ai) as u8;
+    self.base.data[idx + 2] = (or + (r as f32 - or) * ai) as u8;
   }
 
   /// Draws a single pixel at the specified coordinates.
@@ -196,7 +176,7 @@ impl FastImage {
   /// * `x0`, `y0` - Starting point coordinates
   /// * `x1`, `y1` - Ending point coordinates  
   /// * `b`, `g`, `r` - Blue, Green, Red color values (0-255)
-  fn draw_line_aa_single(
+  pub fn draw_line_aa_single(
     &mut self,
     x0: f32,
     y0: f32,
@@ -229,15 +209,6 @@ impl FastImage {
     let ip = |x: f32| x.floor();           // Integer part
     let fp = |x: f32| x - x.floor();       // Fractional part
 
-    // Helper to draw pixel, swapping coordinates back if steep
-    let draw = |img: &mut FastImage, steep: bool, x: f32, y: f32, c: f32| {
-      if steep {
-        img.put_pixel_bgr(y as i32, x as i32, b, g, r, c);  // Swap x,y back
-      } else {
-        img.put_pixel_bgr(x as i32, y as i32, b, g, r, c);  // Normal x,y
-      }
-    };
-
     // First endpoint
     let xend = ip(x0 + 0.5);
     let yend = y0 + gradient * (xend - x0);
@@ -246,20 +217,13 @@ impl FastImage {
     let ypxl1 = ip(yend);
 
     // Draw first endpoint with anti-aliasing
-    draw(
-      self,
-      steep,
-      xpxl1,
-      ypxl1,
-      (1.0 - fp(yend)) * xgap,  // Alpha for lower pixel
-    );
-    draw(
-      self,
-      steep,
-      xpxl1,
-      ypxl1 + 1.0,
-      fp(yend) * xgap,  // Alpha for upper pixel
-    );
+    if steep {
+      self.put_pixel_bgr(ypxl1 as i32, xpxl1 as i32, b, g, r, (1.0 - fp(yend)) * xgap);
+      self.put_pixel_bgr((ypxl1 + 1.0) as i32, xpxl1 as i32, b, g, r, fp(yend) * xgap);
+    } else {
+      self.put_pixel_bgr(xpxl1 as i32, ypxl1 as i32, b, g, r, (1.0 - fp(yend)) * xgap);
+      self.put_pixel_bgr(xpxl1 as i32, (ypxl1 + 1.0) as i32, b, g, r, fp(yend) * xgap);
+    }
 
     let mut intery = yend + gradient;  // Y-intersection for main loop
 
@@ -273,37 +237,23 @@ impl FastImage {
     // Main loop: draw line between endpoints
     for x in ((xpxl1 + 1.0) as i32)..(xpxl2 as i32) {
       // Draw two pixels per x to create anti-aliasing
-      draw(
-        self,
-        steep,
-        x as f32,
-        ip(intery),
-        1.0 - fp(intery),  // Alpha for lower pixel
-      );
-      draw(
-        self,
-        steep,
-        x as f32,
-        ip(intery) + 1.0,
-        fp(intery),  // Alpha for upper pixel
-      );
+      if steep {
+        self.put_pixel_bgr(ip(intery) as i32, x, b, g, r, 1.0 - fp(intery));
+        self.put_pixel_bgr((ip(intery) + 1.0) as i32, x, b, g, r, fp(intery));
+      } else {
+        self.put_pixel_bgr(x, ip(intery) as i32, b, g, r, 1.0 - fp(intery));
+        self.put_pixel_bgr(x, (ip(intery) + 1.0) as i32, b, g, r, fp(intery));
+      }
       intery += gradient;  // Move to next y-intersection
     }
 
     // Draw second endpoint with anti-aliasing
-    draw(
-      self,
-      steep,
-      xpxl2,
-      ypxl2,
-      (1.0 - fp(yend2)) * xgap2,
-    );
-    draw(
-      self,
-      steep,
-      xpxl2,
-      ypxl2 + 1.0,
-      fp(yend2) * xgap2,
-    );
+    if steep {
+      self.put_pixel_bgr(ypxl2 as i32, xpxl2 as i32, b, g, r, (1.0 - fp(yend2)) * xgap2);
+      self.put_pixel_bgr((ypxl2 + 1.0) as i32, xpxl2 as i32, b, g, r, fp(yend2) * xgap2);
+    } else {
+      self.put_pixel_bgr(xpxl2 as i32, ypxl2 as i32, b, g, r, (1.0 - fp(yend2)) * xgap2);
+      self.put_pixel_bgr(xpxl2 as i32, (ypxl2 + 1.0) as i32, b, g, r, fp(yend2) * xgap2);
+    }
   }
 }
