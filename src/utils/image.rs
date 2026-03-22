@@ -1,6 +1,5 @@
 /// Base image structure and conversion utilities
 /// This module provides the foundational BasedImage struct (like "Leg" class)
-
 use opencv::{core, prelude::*};
 
 /// Fast image buffer for pixel manipulation (Base class like "Leg")
@@ -15,36 +14,36 @@ pub struct BasedImage {
 impl BasedImage {
   /// Creates a BasedImage from an OpenCV Mat.
   /// Copies the image data from Mat into a Vec<u8> for fast pixel access.
-  /// 
+  ///
   /// # Arguments
   /// * `mat` - OpenCV Mat containing BGR image data
-  /// 
+  ///
   /// # Returns
   /// BasedImage with copied pixel data
   pub fn from_mat(mat: &Mat) -> Self {
     // Get image dimensions
-    let w = mat.cols() as usize;  // Image width in pixels
-    let h = mat.rows() as usize;  // Image height in pixels
+    let w = mat.cols() as usize; // Image width in pixels
+    let h = mat.rows() as usize; // Image height in pixels
 
     // Extract raw pixel data from OpenCV Mat
     let slice = mat.data_bytes().unwrap();
-    let data = slice.to_vec();  // Copy to owned Vec for mutation
+    let data = slice.to_vec(); // Copy to owned Vec for mutation
 
     Self { w, h, data }
   }
 
   /// Converts BasedImage back to OpenCV Mat.
   /// Creates a new Mat and copies the pixel data into it.
-  /// 
+  ///
   /// # Returns
   /// OpenCV Mat with BGR image data
   pub fn to_mat(&self) -> Mat {
     // Create a new Mat with same dimensions and CV_8UC3 type (8-bit unsigned, 3 channels)
     let mut mat = unsafe {
       Mat::new_rows_cols(
-        self.h as i32,  // Height in pixels
-        self.w as i32,  // Width in pixels
-        core::CV_8UC3,  // 8-bit BGR format
+        self.h as i32, // Height in pixels
+        self.w as i32, // Width in pixels
+        core::CV_8UC3, // 8-bit BGR format
       )
       .unwrap()
     };

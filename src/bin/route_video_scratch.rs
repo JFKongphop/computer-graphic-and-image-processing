@@ -1,16 +1,11 @@
-use opencv::{core, imgcodecs, imgproc, prelude::*, videoio, Error};
-use runarium::utils::{
-  converter::get_bounds, performance::measure, read_file::fit_reader,
-};
 use computer_graphic_and_vision::utils::Drawer;
+use opencv::{Error, core, imgcodecs, imgproc, prelude::*, videoio};
+use runarium::utils::{converter::get_bounds, performance::measure, read_file::fit_reader};
 
 /// ---------------------------
 /// 1. Load & Resize (your code)
 /// ---------------------------
-pub fn load_and_resize_image(
-  path: &str,
-  max_dim: i32,
-) -> Result<(Mat, i32, i32), Error> {
+pub fn load_and_resize_image(path: &str, max_dim: i32) -> Result<(Mat, i32, i32), Error> {
   let img = imgcodecs::imread(path, imgcodecs::IMREAD_COLOR)?;
   let size = img.size()?;
   let (orig_w, orig_h) = (size.width as f64, size.height as f64);
@@ -65,8 +60,7 @@ fn read_route_from_fit(
       };
 
       let x = ((offset_x_percent + nx * route_scale) * width as f64) as f32;
-      let y =
-        ((offset_y_percent + (1.0 - ny) * route_scale) * width as f64) as f32;
+      let y = ((offset_y_percent + (1.0 - ny) * route_scale) * width as f64) as f32;
       (x, y)
     })
     .collect();
@@ -111,10 +105,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         panic!("VideoWriter failed to open!");
       }
 
-      println!(
-        "📍 Loaded {} GPS points from FIT file",
-        route.len()
-      );
+      println!("📍 Loaded {} GPS points from FIT file", route.len());
 
       let line_thickness = 7;
       let point_radius = 10;
@@ -125,29 +116,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let (x1, y1) = route[i];
 
         // Draw line segment on accumulated buffer (Red)
-        fast.draw_line_aa(
-          x0,
-          y0,
-          x1,
-          y1,
-          line_thickness,
-          0,
-          0,
-          255,
-        );
+        fast.draw_line_aa(x0, y0, x1, y1, line_thickness, 0, 0, 255);
 
         // Clone the current accumulated route for this frame
         let mut frame_buffer = Drawer::new(fast.clone_base());
 
         // Draw the moving point as a circle on the frame copy (Green)
-        frame_buffer.draw_circle(
-          x1 as i32,
-          y1 as i32,
-          point_radius,
-          0,
-          255,
-          0,
-        );
+        frame_buffer.draw_circle(x1 as i32, y1 as i32, point_radius, 0, 255, 0);
 
         // Convert to Mat
         let frame = frame_buffer.to_mat();

@@ -5,8 +5,8 @@ use runarium::{
   configs::{
     image_config::RouteImageConfig,
     video_config::{
-      Color, FileConfig, Font, LapDataConfig, PaceDistConfig, RouteColor,
-      RouteScale, RouteVideoConfig,
+      Color, FileConfig, Font, LapDataConfig, PaceDistConfig, RouteColor, RouteScale,
+      RouteVideoConfig,
     },
   },
   generators::{
