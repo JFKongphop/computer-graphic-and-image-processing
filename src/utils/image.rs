@@ -25,8 +25,15 @@ impl BasedImage {
     let w = mat.cols() as usize; // Image width in pixels
     let h = mat.rows() as usize; // Image height in pixels
 
+    // Clone Mat to ensure it's continuous in memory (required for data_bytes())
+    let continuous_mat = if mat.is_continuous() {
+      mat.clone()
+    } else {
+      mat.clone() // Clone always creates a continuous Mat
+    };
+
     // Extract raw pixel data from OpenCV Mat
-    let slice = mat.data_bytes().unwrap();
+    let slice = continuous_mat.data_bytes().unwrap();
     let data = slice.to_vec(); // Copy to owned Vec for mutation
 
     Self { w, h, data }
