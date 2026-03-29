@@ -1,7 +1,5 @@
 use anyhow::Result;
 use csv::ReaderBuilder;
-use opencv::prelude::*;
-use opencv::{core, imgproc};
 use serde::Deserialize;
 use std::fs::File;
 
@@ -21,14 +19,85 @@ struct PixelData {
 
 const N: usize = 33;
 
-// Calibrated brightness bias correction (LAB L* units)
-// This value should be determined from multi-image calibration
-// Current value: based on 8-image analysis showing +1.489 bias
-// TODO: Update after 100-image calibration
-const CALIBRATED_BIAS_L: f32 = 1.489;
+/// 3D Gaussian kernel for smoothing
+fn gaussian_3d(x: i32, y: i32, z: i32, sigma: f32) -> f32 {
+  let dist_sq = (x * x + y * y + z * z) as f32;
+  (-(dist_sq / (2.0 * sigma * sigma))).exp()
+}
+
+/// Apply Gaussian smoothing to interpolated cells only
+fn apply_gaussian_smoothing(
+  lut: &mut Vec<Vec<Vec<[f32; 3]>>>,
+  count: &Vec<Vec<Vec<u32>>>,
+  kernel_size: usize,
+  sigma: f32,
+) {
+  let half_kernel = kernel_size / 2;
+  let mut smoothed_lut = lut.clone();
+  
+  for i in 0..N {
+    for j in 0..N {
+      for k in 0..N {
+        // Only smooth interpolated cells (not cells with real data)
+        if count[i][j][k] > 0 {
+          continue;
+        }
+        
+        let mut weighted_sum = [0.0f32; 3];
+        let mut weight_sum = 0.0f32;
+        
+        // Apply 3D Gaussian kernel
+        for di in -(half_kernel as i32)..=(half_kernel as i32) {
+          for dj in -(half_kernel as i32)..=(half_kernel as i32) {
+            for dk in -(half_kernel as i32)..=(half_kernel as i32) {
+              let ni = i as i32 + di;
+              let nj = j as i32 + dj;
+              let nk = k as i32 + dk;
+              
+              // Skip out-of-bounds
+              if ni < 0 || nj < 0 || nk < 0 || ni >= N as i32 || nj >= N as i32 || nk >= N as i32 {
+                continue;
+              }
+              
+              let ni = ni as usize;
+              let nj = nj as usize;
+              let nk = nk as usize;
+              
+              // Compute Gaussian weight
+              let weight = gaussian_3d(di, dj, dk, sigma);
+              
+              weighted_sum[0] += lut[ni][nj][nk][0] * weight;
+              weighted_sum[1] += lut[ni][nj][nk][1] * weight;
+              weighted_sum[2] += lut[ni][nj][nk][2] * weight;
+              weight_sum += weight;
+            }
+          }
+        }
+        
+        // Apply smoothed values
+        if weight_sum > 0.0 {
+          smoothed_lut[i][j][k][0] = weighted_sum[0] / weight_sum;
+          smoothed_lut[i][j][k][1] = weighted_sum[1] / weight_sum;
+          smoothed_lut[i][j][k][2] = weighted_sum[2] / weight_sum;
+        }
+      }
+    }
+  }
+  
+  // Copy smoothed values back (only for interpolated cells)
+  for i in 0..N {
+    for j in 0..N {
+      for k in 0..N {
+        if count[i][j][k] == 0 {
+          lut[i][j][k] = smoothed_lut[i][j][k];
+        }
+      }
+    }
+  }
+}
 
 fn main() -> Result<()> {
-  println!("🎨 Building 3D LUT from CSV data");
+  println!("🎨 Building 3D LUT from CSV data (IDW + Gaussian Smoothing)");
   println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
   // Step 1: Initialize LUT and COUNT arrays
@@ -114,7 +183,7 @@ fn main() -> Result<()> {
 
   // Step 4: Fill empty cells using inverse-distance weighted interpolation
   if empty_cells > 0 {
-    println!("\n🔧 Filling empty cells with inverse-distance weighted interpolation...");
+    println!("\n🔧 Step 4A: Filling empty cells with IDW interpolation...");
     let mut filled_count = 0;
     
     for i in 0..N {
@@ -192,7 +261,20 @@ fn main() -> Result<()> {
       }
     }
     
-    println!("   ✅ Filled {} empty cells", filled_count);
+    println!("   ✅ Filled {} empty cells with IDW", filled_count);
+    
+    // Step 5: Apply Gaussian smoothing to interpolated cells
+    println!("\n🔧 Step 4B: Applying Gaussian smoothing to interpolated cells...");
+    let kernel_size = 5;  // 5x5x5 kernel
+    let sigma = 1.0;      // Standard deviation
+    
+    println!("   Gaussian parameters:");
+    println!("   - Kernel size: {}x{}x{}", kernel_size, kernel_size, kernel_size);
+    println!("   - Sigma: {}", sigma);
+    
+    apply_gaussian_smoothing(&mut lut, &count, kernel_size, sigma);
+    
+    println!("   ✅ Smoothing applied to {} interpolated cells", filled_count);
   }
   
   // Final LUT composition statistics
@@ -200,27 +282,21 @@ fn main() -> Result<()> {
   let cells_from_data = filled_cells;
   let cells_interpolated = if empty_cells > 0 { empty_cells } else { 0 };
   
-  println!("   From training data: {} ({:.2}%)", 
+  println!("   From training data:    {} ({:.2}%)", 
     cells_from_data, 
     (cells_from_data as f64 / total_cells as f64) * 100.0);
-  println!("   From interpolation: {} ({:.2}%)", 
+  println!("   From IDW + Gaussian:   {} ({:.2}%)", 
     cells_interpolated, 
     (cells_interpolated as f64 / total_cells as f64) * 100.0);
   println!("   ─────────────────────────────────");
-  println!("   Total completion:   {} (100.00%)", total_cells);
-
-  // Step 5: Apply brightness bias correction
-  println!("\n🔧 Applying brightness bias correction...");
-  println!("   Correction: {:+.3} LAB L* units", CALIBRATED_BIAS_L);
-  apply_brightness_correction(&mut lut)?;
-  println!("   ✅ Correction applied to all {} cells", total_cells);
+  println!("   Total completion:      {} (100.00%)", total_cells);
 
   // Save LUT to file
-  println!("\n💾 Writing corrected LUT to file...");
-  let output_file = File::create("outputs/lut_33.cube")?;
+  println!("\n💾 Writing LUT to file...");
+  let output_file = File::create("outputs/lut_33_gaussian.cube")?;
   write_cube_file(output_file, &lut)?;
 
-  println!("✅ Corrected LUT saved to: outputs/lut_33.cube");
+  println!("✅ LUT saved to: outputs/lut_33_gaussian.cube");
 
   // Show some sample LUT values
   println!("\n🔍 Sample LUT values:");
@@ -234,68 +310,14 @@ fn main() -> Result<()> {
   Ok(())
 }
 
-/// Apply brightness bias correction in LAB space to all LUT cells
-fn apply_brightness_correction(lut: &mut Vec<Vec<Vec<[f32; 3]>>>) -> Result<()> {
-  let n = lut.len();
-  
-  for i in 0..n {
-    for j in 0..n {
-      for k in 0..n {
-        let rgb = lut[i][j][k];
-        
-        // Convert RGB to LAB
-        let mut bgr_mat = unsafe { Mat::new_rows_cols(1, 1, core::CV_32FC3)? };
-        let pixel = bgr_mat.at_2d_mut::<core::Vec3f>(0, 0)?;
-        pixel[0] = rgb[2]; // B
-        pixel[1] = rgb[1]; // G
-        pixel[2] = rgb[0]; // R
-        
-        let mut lab_mat = Mat::default();
-        imgproc::cvt_color(
-          &bgr_mat,
-          &mut lab_mat,
-          imgproc::COLOR_BGR2Lab,
-          0,
-          core::AlgorithmHint::ALGO_HINT_DEFAULT,
-        )?;
-        
-        let lab_pixel = lab_mat.at_2d_mut::<core::Vec3f>(0, 0)?;
-        
-        // Apply correction to L* channel
-        // OpenCV LAB: L is [0, 100], but stored as float
-        lab_pixel[0] = (lab_pixel[0] - CALIBRATED_BIAS_L).clamp(0.0, 100.0);
-        
-        // Convert back to RGB
-        let mut corrected_bgr = Mat::default();
-        imgproc::cvt_color(
-          &lab_mat,
-          &mut corrected_bgr,
-          imgproc::COLOR_Lab2BGR,
-          0,
-          core::AlgorithmHint::ALGO_HINT_DEFAULT,
-        )?;
-        
-        let corrected_pixel = corrected_bgr.at_2d::<core::Vec3f>(0, 0)?;
-        
-        // Update LUT with corrected values (clamped to [0, 1])
-        lut[i][j][k][0] = corrected_pixel[2].clamp(0.0, 1.0); // R
-        lut[i][j][k][1] = corrected_pixel[1].clamp(0.0, 1.0); // G
-        lut[i][j][k][2] = corrected_pixel[0].clamp(0.0, 1.0); // B
-      }
-    }
-  }
-  
-  Ok(())
-}
-
 /// Write LUT in .cube format
 fn write_cube_file(mut file: File, lut: &Vec<Vec<Vec<[f32; 3]>>>) -> Result<()> {
   use std::io::Write;
 
   // Write header
-  writeln!(file, "# 3D LUT for Classic Chrome Film Simulation (Bias Corrected)")?;
-  writeln!(file, "# Generated from pixel comparison data with {:+.3} L* bias correction", CALIBRATED_BIAS_L)?;
-  writeln!(file, "TITLE \"Classic Chrome LUT - Corrected\"")?;
+  writeln!(file, "# 3D LUT for Classic Chrome Film Simulation (IDW + Gaussian)")?;
+  writeln!(file, "# Generated from pixel comparison data")?;
+  writeln!(file, "TITLE \"Classic Chrome LUT - IDW + Gaussian\"")?;
   writeln!(file, "LUT_3D_SIZE {}", N)?;
   writeln!(file)?;
 

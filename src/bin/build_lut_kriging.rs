@@ -1,7 +1,5 @@
 use anyhow::Result;
 use csv::ReaderBuilder;
-use opencv::prelude::*;
-use opencv::{core, imgproc};
 use serde::Deserialize;
 use std::fs::File;
 
@@ -21,14 +19,160 @@ struct PixelData {
 
 const N: usize = 33;
 
-// Calibrated brightness bias correction (LAB L* units)
-// This value should be determined from multi-image calibration
-// Current value: based on 8-image analysis showing +1.489 bias
-// TODO: Update after 100-image calibration
-const CALIBRATED_BIAS_L: f32 = 1.489;
+/// Exponential variogram model for Kriging
+/// gamma(h) = nugget + sill * (1 - exp(-h/range))
+fn variogram(distance: f32, nugget: f32, sill: f32, range: f32) -> f32 {
+  if distance == 0.0 {
+    0.0
+  } else {
+    nugget + sill * (1.0 - (-distance / range).exp())
+  }
+}
+
+/// Ordinary Kriging interpolation
+/// Returns interpolated RGB values for an empty cell
+fn kriging_interpolate(
+  target_pos: (usize, usize, usize),
+  neighbors: &[(usize, usize, usize, [f32; 3])],
+  nugget: f32,
+  sill: f32,
+  range: f32,
+) -> [f32; 3] {
+  let n = neighbors.len();
+  
+  if n == 0 {
+    // Fallback: identity mapping
+    return [
+      target_pos.0 as f32 / (N - 1) as f32,
+      target_pos.1 as f32 / (N - 1) as f32,
+      target_pos.2 as f32 / (N - 1) as f32,
+    ];
+  }
+  
+  if n == 1 {
+    // Only one neighbor, use its value
+    return neighbors[0].3;
+  }
+  
+  // Build Kriging system: K * w = k
+  // K is (n+1)x(n+1) covariance matrix
+  // w is (n+1)x1 weights vector (including Lagrange multiplier)
+  // k is (n+1)x1 covariance vector
+  
+  let mut k_matrix = vec![vec![0.0f32; n + 1]; n + 1];
+  let mut k_vector = vec![0.0f32; n + 1];
+  
+  // Compute distance between target and each neighbor
+  let target_i = target_pos.0 as f32;
+  let target_j = target_pos.1 as f32;
+  let target_k = target_pos.2 as f32;
+  
+  // Fill K matrix (covariances between neighbors)
+  for i in 0..n {
+    for j in 0..n {
+      let dist_ij = (
+        (neighbors[i].0 as f32 - neighbors[j].0 as f32).powi(2)
+        + (neighbors[i].1 as f32 - neighbors[j].1 as f32).powi(2)
+        + (neighbors[i].2 as f32 - neighbors[j].2 as f32).powi(2)
+      ).sqrt();
+      
+      // Covariance = sill - variogram
+      k_matrix[i][j] = sill - variogram(dist_ij, nugget, sill, range);
+    }
+    k_matrix[i][n] = 1.0; // Lagrange constraint
+    k_matrix[n][i] = 1.0;
+  }
+  k_matrix[n][n] = 0.0;
+  
+  // Fill k vector (covariances between target and neighbors)
+  for i in 0..n {
+    let dist = (
+      (target_i - neighbors[i].0 as f32).powi(2)
+      + (target_j - neighbors[i].1 as f32).powi(2)
+      + (target_k - neighbors[i].2 as f32).powi(2)
+    ).sqrt();
+    
+    k_vector[i] = sill - variogram(dist, nugget, sill, range);
+  }
+  k_vector[n] = 1.0; // Lagrange constraint
+  
+  // Solve K * w = k using Gaussian elimination (simplified)
+  let weights = solve_linear_system(&k_matrix, &k_vector);
+  
+  // Apply weights to compute interpolated values
+  let mut result = [0.0f32; 3];
+  for i in 0..n {
+    result[0] += weights[i] * neighbors[i].3[0];
+    result[1] += weights[i] * neighbors[i].3[1];
+    result[2] += weights[i] * neighbors[i].3[2];
+  }
+  
+  result
+}
+
+/// Solve linear system Ax = b using Gaussian elimination with partial pivoting
+fn solve_linear_system(a: &[Vec<f32>], b: &[f32]) -> Vec<f32> {
+  let n = b.len();
+  let mut aug = vec![vec![0.0f32; n + 1]; n];
+  
+  // Create augmented matrix [A|b]
+  for i in 0..n {
+    for j in 0..n {
+      aug[i][j] = a[i][j];
+    }
+    aug[i][n] = b[i];
+  }
+  
+  // Forward elimination with partial pivoting
+  for k in 0..n {
+    // Find pivot
+    let mut max_row = k;
+    let mut max_val = aug[k][k].abs();
+    for i in (k + 1)..n {
+      if aug[i][k].abs() > max_val {
+        max_val = aug[i][k].abs();
+        max_row = i;
+      }
+    }
+    
+    // Swap rows
+    if max_row != k {
+      aug.swap(k, max_row);
+    }
+    
+    // Check for singular matrix
+    if aug[k][k].abs() < 1e-10 {
+      continue;
+    }
+    
+    // Eliminate column
+    for i in (k + 1)..n {
+      let factor = aug[i][k] / aug[k][k];
+      for j in k..=n {
+        aug[i][j] -= factor * aug[k][j];
+      }
+    }
+  }
+  
+  // Back substitution
+  let mut x = vec![0.0f32; n];
+  for i in (0..n).rev() {
+    let mut sum = aug[i][n];
+    for j in (i + 1)..n {
+      sum -= aug[i][j] * x[j];
+    }
+    x[i] = if aug[i][i].abs() > 1e-10 {
+      sum / aug[i][i]
+    } else {
+      0.0
+    };
+  }
+  
+  x
+}
 
 fn main() -> Result<()> {
-  println!("🎨 Building 3D LUT from CSV data");
+  println!("🎨 Building 3D LUT from CSV data (Kriging Interpolation)");
   println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
   // Step 1: Initialize LUT and COUNT arrays
@@ -112,10 +256,22 @@ fn main() -> Result<()> {
     println!("   Avg samples per filled cell: {:.2}", total_samples as f64 / filled_cells as f64);
   }
 
-  // Step 4: Fill empty cells using inverse-distance weighted interpolation
+  // Step 4: Fill empty cells using Ordinary Kriging interpolation
   if empty_cells > 0 {
-    println!("\n🔧 Filling empty cells with inverse-distance weighted interpolation...");
+    println!("\n🔧 Filling empty cells with Ordinary Kriging interpolation...");
+    println!("   Variogram parameters:");
+    
+    // Variogram parameters (tuned for color space)
+    let nugget = 0.01;  // Small nugget effect
+    let sill = 0.1;     // Total variance
+    let range = 5.0;    // Correlation range in LUT space
+    
+    println!("   - Nugget: {}", nugget);
+    println!("   - Sill: {}", sill);
+    println!("   - Range: {}", range);
+    
     let mut filled_count = 0;
+    let max_neighbors = 20; // Use up to 20 nearest neighbors for Kriging
     
     for i in 0..N {
       for j in 0..N {
@@ -125,12 +281,10 @@ fn main() -> Result<()> {
             continue;
           }
           
-          // Search for non-empty neighbors with increasing radius
-          let mut found = false;
+          // Find nearest filled neighbors within search radius
+          let mut neighbors = Vec::new();
+          
           for radius in 1..=N {
-            let mut weighted_sum = [0.0f32; 3];
-            let mut weight_sum = 0.0f32;
-            
             // Search all cells within this radius
             for di in -(radius as i32)..=(radius as i32) {
               for dj in -(radius as i32)..=(radius as i32) {
@@ -148,46 +302,31 @@ fn main() -> Result<()> {
                   let nj = nj as usize;
                   let nk = nk as usize;
                   
-                  // Skip empty neighbors
-                  if count[ni][nj][nk] == 0 {
+                  // Skip empty neighbors or self
+                  if count[ni][nj][nk] == 0 || (ni == i && nj == j && nk == k) {
                     continue;
                   }
                   
-                  // Compute distance and weight
-                  let distance = ((di * di + dj * dj + dk * dk) as f32).sqrt();
-                  if distance == 0.0 {
-                    continue;
-                  }
-                  
-                  let weight = 1.0 / distance;
-                  
-                  // Accumulate weighted values
-                  weighted_sum[0] += lut[ni][nj][nk][0] * weight;
-                  weighted_sum[1] += lut[ni][nj][nk][1] * weight;
-                  weighted_sum[2] += lut[ni][nj][nk][2] * weight;
-                  weight_sum += weight;
+                  neighbors.push((ni, nj, nk, lut[ni][nj][nk]));
                 }
               }
             }
             
-            // If we found at least one neighbor, fill the cell
-            if weight_sum > 0.0 {
-              lut[i][j][k][0] = weighted_sum[0] / weight_sum;
-              lut[i][j][k][1] = weighted_sum[1] / weight_sum;
-              lut[i][j][k][2] = weighted_sum[2] / weight_sum;
-              filled_count += 1;
-              found = true;
+            // Stop when we have enough neighbors
+            if neighbors.len() >= max_neighbors {
               break;
             }
           }
           
-          if !found {
-            // Fallback: use identity mapping if no neighbors found
-            lut[i][j][k][0] = i as f32 / (N - 1) as f32;
-            lut[i][j][k][1] = j as f32 / (N - 1) as f32;
-            lut[i][j][k][2] = k as f32 / (N - 1) as f32;
-            filled_count += 1;
+          // Limit to max_neighbors for efficiency
+          if neighbors.len() > max_neighbors {
+            neighbors.truncate(max_neighbors);
           }
+          
+          // Apply Kriging interpolation
+          let interpolated = kriging_interpolate((i, j, k), &neighbors, nugget, sill, range);
+          lut[i][j][k] = interpolated;
+          filled_count += 1;
         }
       }
     }
@@ -203,24 +342,18 @@ fn main() -> Result<()> {
   println!("   From training data: {} ({:.2}%)", 
     cells_from_data, 
     (cells_from_data as f64 / total_cells as f64) * 100.0);
-  println!("   From interpolation: {} ({:.2}%)", 
+  println!("   From Kriging:       {} ({:.2}%)", 
     cells_interpolated, 
     (cells_interpolated as f64 / total_cells as f64) * 100.0);
   println!("   ─────────────────────────────────");
   println!("   Total completion:   {} (100.00%)", total_cells);
 
-  // Step 5: Apply brightness bias correction
-  println!("\n🔧 Applying brightness bias correction...");
-  println!("   Correction: {:+.3} LAB L* units", CALIBRATED_BIAS_L);
-  apply_brightness_correction(&mut lut)?;
-  println!("   ✅ Correction applied to all {} cells", total_cells);
-
   // Save LUT to file
-  println!("\n💾 Writing corrected LUT to file...");
-  let output_file = File::create("outputs/lut_33.cube")?;
+  println!("\n💾 Writing LUT to file...");
+  let output_file = File::create("outputs/lut_33_kriging.cube")?;
   write_cube_file(output_file, &lut)?;
 
-  println!("✅ Corrected LUT saved to: outputs/lut_33.cube");
+  println!("✅ LUT saved to: outputs/lut_33_kriging.cube");
 
   // Show some sample LUT values
   println!("\n🔍 Sample LUT values:");
@@ -234,68 +367,14 @@ fn main() -> Result<()> {
   Ok(())
 }
 
-/// Apply brightness bias correction in LAB space to all LUT cells
-fn apply_brightness_correction(lut: &mut Vec<Vec<Vec<[f32; 3]>>>) -> Result<()> {
-  let n = lut.len();
-  
-  for i in 0..n {
-    for j in 0..n {
-      for k in 0..n {
-        let rgb = lut[i][j][k];
-        
-        // Convert RGB to LAB
-        let mut bgr_mat = unsafe { Mat::new_rows_cols(1, 1, core::CV_32FC3)? };
-        let pixel = bgr_mat.at_2d_mut::<core::Vec3f>(0, 0)?;
-        pixel[0] = rgb[2]; // B
-        pixel[1] = rgb[1]; // G
-        pixel[2] = rgb[0]; // R
-        
-        let mut lab_mat = Mat::default();
-        imgproc::cvt_color(
-          &bgr_mat,
-          &mut lab_mat,
-          imgproc::COLOR_BGR2Lab,
-          0,
-          core::AlgorithmHint::ALGO_HINT_DEFAULT,
-        )?;
-        
-        let lab_pixel = lab_mat.at_2d_mut::<core::Vec3f>(0, 0)?;
-        
-        // Apply correction to L* channel
-        // OpenCV LAB: L is [0, 100], but stored as float
-        lab_pixel[0] = (lab_pixel[0] - CALIBRATED_BIAS_L).clamp(0.0, 100.0);
-        
-        // Convert back to RGB
-        let mut corrected_bgr = Mat::default();
-        imgproc::cvt_color(
-          &lab_mat,
-          &mut corrected_bgr,
-          imgproc::COLOR_Lab2BGR,
-          0,
-          core::AlgorithmHint::ALGO_HINT_DEFAULT,
-        )?;
-        
-        let corrected_pixel = corrected_bgr.at_2d::<core::Vec3f>(0, 0)?;
-        
-        // Update LUT with corrected values (clamped to [0, 1])
-        lut[i][j][k][0] = corrected_pixel[2].clamp(0.0, 1.0); // R
-        lut[i][j][k][1] = corrected_pixel[1].clamp(0.0, 1.0); // G
-        lut[i][j][k][2] = corrected_pixel[0].clamp(0.0, 1.0); // B
-      }
-    }
-  }
-  
-  Ok(())
-}
-
 /// Write LUT in .cube format
 fn write_cube_file(mut file: File, lut: &Vec<Vec<Vec<[f32; 3]>>>) -> Result<()> {
   use std::io::Write;
 
   // Write header
-  writeln!(file, "# 3D LUT for Classic Chrome Film Simulation (Bias Corrected)")?;
-  writeln!(file, "# Generated from pixel comparison data with {:+.3} L* bias correction", CALIBRATED_BIAS_L)?;
-  writeln!(file, "TITLE \"Classic Chrome LUT - Corrected\"")?;
+  writeln!(file, "# 3D LUT for Classic Chrome Film Simulation (Kriging)")?;
+  writeln!(file, "# Generated from pixel comparison data")?;
+  writeln!(file, "TITLE \"Classic Chrome LUT - Kriging\"")?;
   writeln!(file, "LUT_3D_SIZE {}", N)?;
   writeln!(file)?;
 

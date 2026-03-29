@@ -9,6 +9,9 @@ opencv = "0.97.2"
 runarium = "0.1.0"
 rand = "0.8"
 rand_distr = "0.4"
+serde = "1.0.228"
+csv = "1.4.0"
+rayon = "1.8"
 
 [[bin]]
 name = "rvs"
@@ -17,3 +20,35 @@ path = "src/bin/route_video_scratch.rs"
 [[bin]]
 name = "rvw"
 path = "src/bin/route_video_wasm.rs"
+
+[[bin]]
+name = "apply_lut"
+path = "src/bin/apply_lut.rs"
+
+[[bin]]
+name = "compare_lut"
+path = "src/bin/compare_lut.rs"
+
+[[bin]]
+name = "stratified_compare_pixel"
+path = "src/bin/stratified_compare_pixel.rs"
+
+[[bin]]
+name = "build_lut_kriging"
+path = "src/bin/build_lut_kriging.rs"
+
+[[bin]]
+name = "build_lut_gaussian"
+path = "src/bin/build_lut_gaussian.rs"
+
+[[bin]]
+name = "stratified_compare_multi"
+path = "src/bin/stratified_compare_multi.rs"
+
+[[bin]]
+name = "analyze_brightness_bias"
+path = "src/bin/analyze_brightness_bias.rs"
+
+[[bin]]
+name = "correct_lut_bias"
+path = "src/bin/correct_lut_bias.rs"
