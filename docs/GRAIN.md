@@ -126,7 +126,13 @@ B' = clamp(80 + (-31.52), 0, 255) = 48
 This section maps the actual Rust implementation code to the mathematical formulas above.
 
 ### Formula 1: Luminance Calculation
-**Math:** $L = \frac{0.2126 \cdot R + 0.7152 \cdot G + 0.0722 \cdot B}{255}$
+**Math:**
+ 
+$$
+\begin{aligned}
+L = \frac{0.2126 \cdot R + 0.7152 \cdot G + 0.0722 \cdot B}{255}
+\end{aligned}
+$$
 
 **Code:** [`src/utils/grain.rs:158`](../src/utils/grain.rs#L158)
 ```rust
